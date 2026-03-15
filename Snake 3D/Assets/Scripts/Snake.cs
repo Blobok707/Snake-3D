@@ -4,16 +4,24 @@ using UnityEngine;
 public class Snake : MonoBehaviour
 {
     [Header("Movement")]
-    public float moveInterval = 0.3f; // Her kac saniyede bir hareket etsin
+    public float moveInterval = 0.3f;
     private float moveTimer;
 
+    [Header("Smooth Movement")]
+    public float smoothSpeed = 15f;
+
+    [Header("Start Settings")]
+    public int startBodyCount = 2; // Baslangicta kac govde parcasi olsun
+    private bool hasStarted = false;
+
     [Header("Direction")]
-    private Vector3 currentDirection = Vector3.right; // Baslangicta saga git
+    private Vector3 currentDirection = Vector3.right;
     private Vector3 inputDirection = Vector3.right;
 
     [Header("Body")]
     public GameObject bodyPrefab;
     public List<Transform> bodyParts = new List<Transform>();
+    private List<Vector3> targetPositions = new List<Vector3>();
 
     [Header("Materials")]
     public Material headMaterial;
@@ -21,19 +29,48 @@ public class Snake : MonoBehaviour
 
     void Start()
     {
-        // Basi listeye ekle
+        // Basi ekle
         bodyParts.Add(transform);
-        moveTimer = moveInterval;
+        targetPositions.Add(transform.position);
 
-        // Basa materyal ata
         if (headMaterial != null)
             GetComponent<Renderer>().material = headMaterial;
+
+        // Baslangic govde parcalarini olustur (basindan geriye dogru)
+        for (int i = 1; i <= startBodyCount; i++)
+        {
+            Vector3 partPos = transform.position + Vector3.left * i;
+            GameObject newPart = Instantiate(bodyPrefab, partPos, Quaternion.identity);
+
+            if (bodyMaterial != null)
+                newPart.GetComponent<Renderer>().material = bodyMaterial;
+
+            bodyParts.Add(newPart.transform);
+            targetPositions.Add(partPos);
+        }
+
+        moveTimer = moveInterval;
     }
 
     void Update()
     {
         if (GameManager.Instance.isGameOver)
             return;
+
+        // Oyun henuz baslamadiysa tus bekleme
+        if (!hasStarted)
+        {
+            if (Input.GetKeyDown(KeyCode.UpArrow) || Input.GetKeyDown(KeyCode.W) ||
+                Input.GetKeyDown(KeyCode.DownArrow) || Input.GetKeyDown(KeyCode.S) ||
+                Input.GetKeyDown(KeyCode.LeftArrow) || Input.GetKeyDown(KeyCode.A) ||
+                Input.GetKeyDown(KeyCode.RightArrow) || Input.GetKeyDown(KeyCode.D))
+            {
+                HandleInput();
+                hasStarted = true;
+                moveTimer = moveInterval;
+            }
+            return;
+        }
 
         HandleInput();
 
@@ -43,26 +80,19 @@ public class Snake : MonoBehaviour
             Move();
             moveTimer = moveInterval;
         }
+
+        SmoothMove();
     }
 
     void HandleInput()
     {
-        // Ters yone gidemez (ornegin saga giderken sola donemez)
-        if (Input.GetKeyDown(KeyCode.UpArrow) && currentDirection != Vector3.back)
+        if ((Input.GetKeyDown(KeyCode.UpArrow) || Input.GetKeyDown(KeyCode.W)) && currentDirection != Vector3.back)
             inputDirection = Vector3.forward;
-        else if (Input.GetKeyDown(KeyCode.DownArrow) && currentDirection != Vector3.forward)
+        else if ((Input.GetKeyDown(KeyCode.DownArrow) || Input.GetKeyDown(KeyCode.S)) && currentDirection != Vector3.forward)
             inputDirection = Vector3.back;
-        else if (Input.GetKeyDown(KeyCode.LeftArrow) && currentDirection != Vector3.right)
+        else if ((Input.GetKeyDown(KeyCode.LeftArrow) || Input.GetKeyDown(KeyCode.A)) && currentDirection != Vector3.right)
             inputDirection = Vector3.left;
-        else if (Input.GetKeyDown(KeyCode.RightArrow) && currentDirection != Vector3.left)
-            inputDirection = Vector3.right;
-        else if (Input.GetKeyDown(KeyCode.W) && currentDirection != Vector3.back)
-            inputDirection = Vector3.forward;
-        else if (Input.GetKeyDown(KeyCode.S) && currentDirection != Vector3.forward)
-            inputDirection = Vector3.back;
-        else if (Input.GetKeyDown(KeyCode.A) && currentDirection != Vector3.right)
-            inputDirection = Vector3.left;
-        else if (Input.GetKeyDown(KeyCode.D) && currentDirection != Vector3.left)
+        else if ((Input.GetKeyDown(KeyCode.RightArrow) || Input.GetKeyDown(KeyCode.D)) && currentDirection != Vector3.left)
             inputDirection = Vector3.right;
     }
 
@@ -70,48 +100,65 @@ public class Snake : MonoBehaviour
     {
         currentDirection = inputDirection;
 
-        // Onceki pozisyonlari kaydet
-        List<Vector3> previousPositions = new List<Vector3>();
-        foreach (Transform part in bodyParts)
-        {
-            previousPositions.Add(part.position);
-        }
+        List<Vector3> previousTargets = new List<Vector3>(targetPositions);
 
-        // Basi hareket ettir
-        Vector3 newHeadPos = bodyParts[0].position + currentDirection;
+        Vector3 newHeadPos = targetPositions[0] + currentDirection;
 
-        // Sinir kontrolu (duvardan gecme)
+        // Sinir kontrolu
         int gw = GameManager.Instance.gridWidth;
         int gh = GameManager.Instance.gridHeight;
 
         if (newHeadPos.x < 0 || newHeadPos.x >= gw ||
             newHeadPos.z < 0 || newHeadPos.z >= gh)
         {
+            SnapAllToTarget();
             GameManager.Instance.GameOver();
             return;
         }
 
         // Kendine carpma kontrolu
-        for (int i = 1; i < bodyParts.Count; i++)
+        for (int i = 1; i < targetPositions.Count; i++)
         {
-            if (Vector3.Distance(newHeadPos, bodyParts[i].position) < 0.5f)
+            if (Vector3.Distance(newHeadPos, targetPositions[i]) < 0.5f)
             {
+                SnapAllToTarget();
                 GameManager.Instance.GameOver();
                 return;
             }
         }
 
-        // Basi yeni pozisyona tasi
-        bodyParts[0].position = newHeadPos;
+        targetPositions[0] = newHeadPos;
 
-        // Govde parcalarini takip ettir
-        for (int i = 1; i < bodyParts.Count; i++)
+        for (int i = 1; i < targetPositions.Count; i++)
         {
-            bodyParts[i].position = previousPositions[i - 1];
+            targetPositions[i] = previousTargets[i - 1];
         }
 
-        // Yemek kontrolu
         CheckFoodCollision();
+    }
+
+    void SmoothMove()
+    {
+        for (int i = 0; i < bodyParts.Count; i++)
+        {
+            if (bodyParts[i] != null)
+            {
+                bodyParts[i].position = Vector3.Lerp(
+                    bodyParts[i].position,
+                    targetPositions[i],
+                    Time.deltaTime * smoothSpeed
+                );
+            }
+        }
+    }
+
+    void SnapAllToTarget()
+    {
+        for (int i = 0; i < bodyParts.Count; i++)
+        {
+            if (bodyParts[i] != null)
+                bodyParts[i].position = targetPositions[i];
+        }
     }
 
     void CheckFoodCollision()
@@ -119,7 +166,7 @@ public class Snake : MonoBehaviour
         GameObject food = GameObject.FindGameObjectWithTag("Food");
         if (food != null)
         {
-            float dist = Vector3.Distance(bodyParts[0].position, food.transform.position);
+            float dist = Vector3.Distance(targetPositions[0], food.transform.position);
             if (dist < 0.5f)
             {
                 Grow();
@@ -131,13 +178,20 @@ public class Snake : MonoBehaviour
 
     void Grow()
     {
-        // Son parcayi bul ve onun pozisyonuna yeni parca ekle
         Transform lastPart = bodyParts[bodyParts.Count - 1];
+        Vector3 lastTarget = targetPositions[targetPositions.Count - 1];
+
         GameObject newPart = Instantiate(bodyPrefab, lastPart.position, Quaternion.identity);
 
         if (bodyMaterial != null)
             newPart.GetComponent<Renderer>().material = bodyMaterial;
 
         bodyParts.Add(newPart.transform);
+        targetPositions.Add(lastTarget);
+    }
+
+    public bool HasStarted()
+    {
+        return hasStarted;
     }
 }
